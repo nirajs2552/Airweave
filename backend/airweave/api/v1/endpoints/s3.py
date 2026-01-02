@@ -51,8 +51,18 @@ async def configure_s3_destination(
     Requires S3_DESTINATION feature flag to be enabled for the organization.
     Creates or updates the S3 connection with provided credentials.
     """
-    # Check feature flag
-    if not ctx.has_feature(FeatureFlag.S3_DESTINATION):
+    # CONNECTOR-ONLY MODE: S3 is always available (no feature flag required)
+    # In connector-only mode, S3 is the primary destination
+    # Check feature flag only if not in connector-only mode
+    from airweave.core.config import settings
+    
+    # Skip feature flag check in connector-only mode (when Qdrant is not configured)
+    # QDRANT_HOST and QDRANT_PORT are Optional and default to None in connector-only mode
+    is_connector_only_mode = not settings.QDRANT_HOST or not settings.QDRANT_PORT
+    
+    if is_connector_only_mode:
+        ctx.logger.info("Connector-only mode: S3 destination enabled without feature flag")
+    elif not ctx.has_feature(FeatureFlag.S3_DESTINATION):
         raise HTTPException(
             status_code=403,
             detail="S3_DESTINATION feature not enabled for this organization. "
@@ -160,8 +170,15 @@ async def test_s3_connection(
 
     Validates credentials by attempting to connect to the bucket.
     """
-    # Check feature flag
-    if not ctx.has_feature(FeatureFlag.S3_DESTINATION):
+    # CONNECTOR-ONLY MODE: S3 is always available (no feature flag required)
+    from airweave.core.config import settings
+    
+    # Skip feature flag check in connector-only mode (when Qdrant is not configured)
+    is_connector_only_mode = not settings.QDRANT_HOST or not settings.QDRANT_PORT
+    
+    if is_connector_only_mode:
+        ctx.logger.info("Connector-only mode: S3 test enabled without feature flag")
+    elif not ctx.has_feature(FeatureFlag.S3_DESTINATION):
         raise HTTPException(
             status_code=403,
             detail="S3_DESTINATION feature not enabled for this organization",
@@ -230,7 +247,7 @@ async def delete_s3_configuration(
     return {"status": "success", "message": "S3 configuration removed"}
 
 
-@router.get("/s3/status")
+@router.get("/status")
 async def get_s3_status(
     db: AsyncSession = Depends(deps.get_db),
     ctx: ApiContext = Depends(deps.get_context),

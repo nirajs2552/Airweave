@@ -288,21 +288,53 @@ class S3Destination(BaseDestination):
         # Determine file extension
         extension = self._get_file_extension(mime_type, filename)
 
-        # Upload blob if we have sync_id and file info
+        # Upload blob if we have file info
         blob_key = None
-        if self.sync_id and filename:
+        if filename:
             try:
-                # Use storage_manager to get file content
-                file_content = await storage_manager.get_file_content(
-                    entity_id=entity_id,
-                    sync_id=self.sync_id,
-                    filename=filename,
-                    logger=self.logger,
-                )
+                file_content = None
+                
+                # First, try to read from local_path if available (for direct uploads)
+                local_path = getattr(entity, "local_path", None)
+                if local_path:
+                    try:
+                        # Try async file reading first (aiofiles)
+                        try:
+                            import aiofiles
+                            async with aiofiles.open(local_path, "rb") as f:
+                                file_content = await f.read()
+                            self.logger.debug(f"Read file from local_path (async): {local_path} ({len(file_content)} bytes)")
+                        except ImportError:
+                            # Fallback to synchronous file reading if aiofiles not available
+                            import asyncio
+                            loop = asyncio.get_event_loop()
+                            file_content = await loop.run_in_executor(None, lambda: open(local_path, "rb").read())
+                            self.logger.debug(f"Read file from local_path (sync): {local_path} ({len(file_content)} bytes)")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to read from local_path {local_path}: {e}", exc_info=True)
+                
+                # Fallback: Use storage_manager if we have sync_id (for sync jobs)
+                if file_content is None and self.sync_id:
+                    try:
+                        file_content = await storage_manager.get_file_content(
+                            entity_id=entity_id,
+                            sync_id=self.sync_id,
+                            filename=filename,
+                            logger=self.logger,
+                        )
+                        if file_content:
+                            self.logger.debug(f"Read file from storage_manager for entity {entity_id}")
+                    except Exception as e:
+                        self.logger.debug(f"storage_manager.get_file_content failed: {e}")
 
                 if file_content is not None:
                     # Upload actual file content
                     blob_key = f"{base_path}/blobs/{entity_id}{extension}"
+
+                    # Build tagging string (sync_id may be None for direct uploads)
+                    tagging = f"entity_id={entity_id}"
+                    if self.sync_id:
+                        tagging += f"&sync_id={self.sync_id}"
 
                     await s3.put_object(
                         Bucket=self.bucket_name,
@@ -315,14 +347,14 @@ class S3Destination(BaseDestination):
                             "entity_type": entity.__class__.__name__,
                         },
                         # Use S3 tags for easier querying/deletion
-                        Tagging=f"entity_id={entity_id}&sync_id={self.sync_id}",
+                        Tagging=tagging,
                     )
 
-                    self.logger.debug(f"Uploaded blob for entity {entity_id}: {blob_key}")
+                    self.logger.info(f"Uploaded blob for entity {entity_id}: {blob_key} ({len(file_content)} bytes)")
                 else:
-                    self.logger.debug(f"No file content available for {entity_id}")
+                    self.logger.warning(f"No file content available for {entity_id} (local_path: {local_path}, sync_id: {self.sync_id})")
             except Exception as e:
-                self.logger.warning(f"Failed to upload blob for {entity_id}: {e}")
+                self.logger.error(f"Failed to upload blob for {entity_id}: {e}", exc_info=True)
                 blob_key = None
 
         # Prepare entity metadata

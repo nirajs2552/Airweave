@@ -609,33 +609,11 @@ class SyncFactory:
         # Create all destinations from destination_connection_ids
         for destination_connection_id in sync.destination_connection_ids:
             try:
-                # Special case: Native Qdrant (uses settings, no DB connection)
+                # CONNECTOR-ONLY MODE: Skip Qdrant (vector DB not supported)
                 if destination_connection_id == NATIVE_QDRANT_UUID:
-                    logger.info("Using native Qdrant destination (settings-based)")
-                    destination_model = await crud.destination.get_by_short_name(db, "qdrant")
-                    if not destination_model:
-                        logger.warning("Qdrant destination model not found")
-                        continue
-
-                    destination_schema = schemas.Destination.model_validate(destination_model)
-                    destination_class = resource_locator.get_destination(destination_schema)
-
-                    # Fail-fast: vector_size must be set
-                    if collection.vector_size is None:
-                        raise ValueError(f"Collection {collection.id} has no vector_size set.")
-
-                    # Native Qdrant: no credentials (uses settings)
-                    destination = await destination_class.create(
-                        credentials=None,
-                        config=None,
-                        collection_id=collection.id,
-                        organization_id=collection.organization_id,
-                        vector_size=collection.vector_size,
-                        logger=logger,
+                    logger.warning(
+                        "Skipping Qdrant destination - connector-only mode does not support vector databases"
                     )
-
-                    destinations.append(destination)
-                    logger.info("Created native Qdrant destination")
                     continue
 
                 # Regular case: Load connection from database
@@ -654,6 +632,14 @@ class SyncFactory:
                 if not destination_model:
                     logger.warning(
                         f"Destination {destination_connection.short_name} not found, skipping"
+                    )
+                    continue
+
+                # CONNECTOR-ONLY MODE: Only allow S3 destinations
+                if destination_connection.short_name != "s3":
+                    logger.warning(
+                        f"Skipping destination {destination_connection.short_name} - "
+                        "connector-only mode only supports S3 destinations"
                     )
                     continue
 

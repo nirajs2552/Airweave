@@ -213,47 +213,51 @@ class EntityPipeline:
         await self._build_textual_representations(entities_to_process, sync_context)
 
         # Filter out entities with empty textual_representation
+        # CONNECTOR-ONLY MODE: FileEntity types may have metadata-only textual_representation
+        from airweave.core.config import settings
+        is_connector_only_mode = not settings.QDRANT_HOST or not settings.QDRANT_PORT
+
         valid_entities = []
         for entity in entities_to_process:
             text = entity.textual_representation
-            if not text or not text.strip():
+            # In connector-only mode, FileEntity (not CodeFileEntity) can have metadata-only text
+            if is_connector_only_mode and isinstance(entity, FileEntity) and not isinstance(entity, CodeFileEntity):
+                # FileEntity in connector-only mode: metadata is sufficient
+                if text and text.strip():
+                    valid_entities.append(entity)
+                else:
+                    sync_context.logger.warning(
+                        "FileEntity %s[%s] has empty metadata, skipping.",
+                        entity.__class__.__name__,
+                        entity.entity_id,
+                    )
+            elif not text or not text.strip():
                 sync_context.logger.warning(
                     "Entity %s[%s] has empty textual_representation, skipping.",
                     entity.__class__.__name__,
                     entity.entity_id,
                 )
                 continue
-            valid_entities.append(entity)
+            else:
+                valid_entities.append(entity)
 
         skipped = len(entities_to_process) - len(valid_entities)
         if skipped:
             await sync_context.progress.increment("skipped", skipped)
         entities_to_process = valid_entities
 
-        # Chunk entities (entity multiplication: 1 entity → N chunk entities)
+        # CONNECTOR-ONLY MODE: Skip chunking and embedding, persist entities directly to S3
         # entities_to_process may be empty if all failed conversion (handled in method)
         if not entities_to_process:
-            sync_context.logger.debug("No entities to chunk - all failed conversion")
+            sync_context.logger.debug("No entities to process - all failed conversion")
             return
 
-        chunk_entities = await self._chunk_entities(entities_to_process, sync_context)
+        # Persist entities directly to destinations (S3 only, no chunking/embedding)
+        await self._persist_to_destinations(entities_to_process, partitions, sync_context)
 
-        # Release large textual bodies on parent entities once chunks are created
+        # Release large textual bodies after persistence
         for entity in entities_to_process:
             entity.textual_representation = None
-
-        # Embed chunk entities (sets vectors field)
-        await self._embed_entities(chunk_entities, sync_context)
-
-        # Persist to destinations (COMMIT POINT)
-        await self._persist_to_destinations(chunk_entities, partitions, sync_context)
-
-        # Drop chunk payloads/vectors ASAP to minimise concurrent memory footprint
-        for chunk in chunk_entities:
-            chunk.textual_representation = None
-            if chunk.airweave_system_metadata:
-                chunk.airweave_system_metadata.vectors = None
-        chunk_entities.clear()
 
         # Persist to database (only after destination success)
         await self._persist_to_database(partitions, sync_context)
@@ -981,8 +985,17 @@ class EntityPipeline:
         2. Determines the appropriate converter for each entity type
         3. Batch converts content and appends to textual_representation
         4. Tracks and removes failed entities
+
+        CONNECTOR-ONLY MODE: For FileEntity types, skips document conversion
+        and only keeps metadata, allowing files to be uploaded to S3 without
+        requiring Mistral API key or other conversion services.
         """
+        from airweave.core.config import settings
+
         source_name = sync_context.source._short_name
+
+        # Check if we're in connector-only mode (no Qdrant configured)
+        is_connector_only_mode = not settings.QDRANT_HOST or not settings.QDRANT_PORT
 
         # Step 1: Build metadata section for all entities
         # CodeFileEntity is exempt because code is self-documenting (AST chunking works on raw code)
@@ -994,12 +1007,35 @@ class EntityPipeline:
 
         await asyncio.gather(*[_build_metadata(e) for e in entities])
 
+        # CONNECTOR-ONLY MODE: Skip document conversion for FileEntity types
+        # Files will be uploaded to S3 as-is without requiring conversion services
+        if is_connector_only_mode:
+            sync_context.logger.info(
+                "Connector-only mode: Skipping document conversion for FileEntity types. "
+                "Files will be uploaded to S3 with metadata only."
+            )
+            # For FileEntity types, keep only metadata (no content conversion)
+            # Other entity types (WebEntity, etc.) still go through conversion
+            file_entities = [e for e in entities if isinstance(e, FileEntity) and not isinstance(e, CodeFileEntity)]
+            if file_entities:
+                sync_context.logger.info(
+                    f"Skipping conversion for {len(file_entities)} FileEntity instances "
+                    "(connector-only mode - files will be uploaded to S3 as-is)"
+                )
+                # FileEntity instances already have metadata in textual_representation
+                # They will be processed without content conversion
+
         # Step 2: Partition entities by converter
         # Store (entity, key) tuples to avoid recomputing keys later
         failed_entities = []  # Track entities that failed (including unsupported types)
         converter_groups: Dict[Any, List[Tuple[BaseEntity, str]]] = {}
 
         for entity in entities:
+            # CONNECTOR-ONLY MODE: Skip converter lookup for FileEntity (not CodeFileEntity)
+            if is_connector_only_mode and isinstance(entity, FileEntity) and not isinstance(entity, CodeFileEntity):
+                # FileEntity in connector-only mode: keep metadata only, skip conversion
+                continue
+
             try:
                 converter, key = self._get_converter_and_key(entity)
                 if converter is None:
@@ -1452,15 +1488,16 @@ class EntityPipeline:
 
     async def _persist_to_destinations(
         self,
-        chunk_entities: List[BaseEntity],
+        entities: List[BaseEntity],
         partitions: Dict[str, Any],
         sync_context: SyncContext,
     ) -> None:
-        """Persist chunks to vector databases (COMMIT POINT).
+        """Persist entities to destinations (S3) (COMMIT POINT).
 
         Only handles INSERT/UPDATE. Deletes handled separately in _handle_deletes().
+        CONNECTOR-ONLY MODE: No chunking/embedding, direct entity persistence.
         """
-        if not chunk_entities:
+        if not entities:
             return
 
         # Collect parent IDs needing clear (ONLY updates)
@@ -1468,25 +1505,27 @@ class EntityPipeline:
         if partitions["updates"]:
             parent_ids_to_clear.extend([e.entity_id for e in partitions["updates"]])
 
-        # Clear old chunks for updates
+        # Clear old entities for updates (if destination supports it)
         if parent_ids_to_clear:
             sync_context.logger.debug(
                 f"Clearing {len(parent_ids_to_clear)} updated entities from destinations"
             )
             for dest in sync_context.destinations:
-                await self._retry_destination_operation(
-                    operation=lambda d=dest: d.bulk_delete_by_parent_ids(
-                        parent_ids_to_clear, sync_context.sync.id
-                    ),
-                    operation_name="update clear",
-                    sync_context=sync_context,
-                )
+                # Only clear if destination supports bulk_delete_by_parent_ids
+                if hasattr(dest, 'bulk_delete_by_parent_ids'):
+                    await self._retry_destination_operation(
+                        operation=lambda d=dest: d.bulk_delete_by_parent_ids(
+                            parent_ids_to_clear, sync_context.sync.id
+                        ),
+                        operation_name="update clear",
+                        sync_context=sync_context,
+                    )
 
-        # Insert new chunks
-        sync_context.logger.debug(f"Inserting {len(chunk_entities)} chunk entities to destinations")
+        # Insert/update entities directly to S3
+        sync_context.logger.debug(f"Persisting {len(entities)} entities to destinations")
         for dest in sync_context.destinations:
             await self._retry_destination_operation(
-                operation=lambda d=dest: d.bulk_insert(chunk_entities),
+                operation=lambda d=dest: d.bulk_insert(entities),
                 operation_name="insert",
                 sync_context=sync_context,
             )

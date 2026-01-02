@@ -14,6 +14,7 @@ import { SourceConnectionSettings } from './SourceConnectionSettings';
 import { EntityStateList } from './EntityStateList';
 import { SyncErrorCard } from './SyncErrorCard';
 import { SourceAuthenticationView } from '@/components/shared/SourceAuthenticationView';
+import { FileBrowser } from './FileBrowser';
 import {
   Tooltip,
   TooltipContent,
@@ -908,6 +909,39 @@ const SourceConnectionStateView: React.FC<Props> = ({
               </div>
             </div>
           )}
+
+          {/* File Browser for SharePoint and OneDrive (connector-only mode) */}
+          {(() => {
+            const isSharePointOrOneDrive = sourceConnection?.short_name === 'sharepoint' || sourceConnection?.short_name === 'onedrive';
+            const hasCollectionId = !!(collectionId || sourceConnection?.readable_collection_id);
+            const shouldShow = !isFederatedSource && isSharePointOrOneDrive && hasCollectionId;
+            
+            // Always log for debugging (helps identify issues)
+            console.log('[FileBrowser] Visibility check:', {
+              shouldShow,
+              isFederatedSource,
+              shortName: sourceConnection?.short_name,
+              isSharePointOrOneDrive,
+              collectionId,
+              readable_collection_id: sourceConnection?.readable_collection_id,
+              hasCollectionId,
+              sourceConnectionId,
+            });
+            
+            if (!shouldShow) {
+              return null;
+            }
+            
+            return (
+              <div className="mt-4">
+                <FileBrowser
+                  sourceConnectionId={sourceConnectionId}
+                  collectionId={collectionId || sourceConnection?.readable_collection_id || ''}
+                  isDark={isDark}
+                />
+              </div>
+            );
+          })()}
 
           {/* Show Entity State List only for non-federated sources */}
           {!isFederatedSource && (

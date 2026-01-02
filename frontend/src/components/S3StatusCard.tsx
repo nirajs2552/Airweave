@@ -21,7 +21,10 @@ interface S3Status {
 }
 
 export function S3StatusCard() {
-  const hasFeature = useOrganizationStore((state) => state.hasFeature(FeatureFlags.S3_DESTINATION));
+  // In connector-only mode or local development, always show S3 config
+  // Check if we're in local development mode
+  const isLocalDev = import.meta.env.DEV || import.meta.env.VITE_LOCAL_DEVELOPMENT === 'true';
+  const hasFeature = isLocalDev ? true : useOrganizationStore((state) => state.hasFeature(FeatureFlags.S3_DESTINATION));
   const [status, setStatus] = useState<S3Status | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showConfigModal, setShowConfigModal] = useState(false);

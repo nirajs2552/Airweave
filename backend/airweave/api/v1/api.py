@@ -10,14 +10,14 @@ from airweave.api.v1.endpoints import (
     connections,
     cursor_dev,
     destinations,
-    embedding_models,
     entities,
     entity_counts,
+    file_browser,
     file_retrieval,
+    file_upload,
     health,
     organizations,
     s3,
-    search,
     source_connections,
     source_rate_limits,
     sources,
@@ -38,12 +38,8 @@ api_router.include_router(billing.router, prefix="/billing", tags=["billing"])
 api_router.include_router(usage.router, prefix="/usage", tags=["usage"])
 api_router.include_router(sources.router, prefix="/sources", tags=["sources"])
 api_router.include_router(destinations.router, prefix="/destinations", tags=["destinations"])
-api_router.include_router(
-    embedding_models.router, prefix="/embedding_models", tags=["embedding_models"]
-)
 api_router.include_router(auth_providers.router, prefix="/auth-providers", tags=["auth-providers"])
 api_router.include_router(collections.router, prefix="/collections", tags=["collections"])
-api_router.include_router(search.router, prefix="/collections", tags=["collections"])
 api_router.include_router(connections.router, prefix="/connections", tags=["connections"])
 api_router.include_router(
     source_connections.router, prefix="/source-connections", tags=["source-connections"]
@@ -56,6 +52,8 @@ api_router.include_router(entities.router, prefix="/entities", tags=["entities"]
 api_router.include_router(entity_counts.router, prefix="/entity-counts", tags=["entity-counts"])
 api_router.include_router(transformers.router, prefix="/transformers", tags=["transformers"])
 api_router.include_router(file_retrieval.router, prefix="/files", tags=["files"])
+api_router.include_router(file_browser.router, prefix="/file-browser", tags=["file-browser"])
+api_router.include_router(file_upload.router, prefix="/file-upload", tags=["file-upload"])
 api_router.include_router(s3.router, prefix="/s3", tags=["s3"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
 

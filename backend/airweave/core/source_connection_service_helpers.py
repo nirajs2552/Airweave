@@ -58,40 +58,41 @@ class SourceConnectionHelpers:
     ) -> list[UUID]:
         """Get destination connection IDs based on feature flags.
 
+        CONNECTOR-ONLY MODE: Only returns S3 destinations (Qdrant removed).
+
         Args:
             db: Database session
             ctx: API context with organization and feature flags
 
         Returns:
-            List of destination connection IDs (always includes Qdrant, adds S3 if enabled)
+            List of destination connection IDs (S3 only in connector-only mode)
         """
         from sqlalchemy import and_, select
 
         from airweave.models.connection import Connection
 
-        destination_ids = [NATIVE_QDRANT_UUID]  # Always include Qdrant as primary
+        destination_ids = []
 
-        # Add S3 if feature flag enabled
-        if ctx.has_feature(FeatureFlag.S3_DESTINATION):
-            # Find S3 connection for this organization
-            stmt = select(Connection).where(
-                and_(
-                    Connection.organization_id == ctx.organization.id,
-                    Connection.short_name == "s3",
-                    Connection.integration_type == "DESTINATION",
-                )
+        # CONNECTOR-ONLY MODE: Only S3 destinations are supported
+        # Find S3 connection for this organization
+        stmt = select(Connection).where(
+            and_(
+                Connection.organization_id == ctx.organization.id,
+                Connection.short_name == "s3",
+                Connection.integration_type == "DESTINATION",
             )
-            result = await db.execute(stmt)
-            s3_connection = result.scalar_one_or_none()
+        )
+        result = await db.execute(stmt)
+        s3_connection = result.scalar_one_or_none()
 
-            if s3_connection:
-                destination_ids.append(s3_connection.id)
-                ctx.logger.info("S3 destination enabled for sync (feature flag active)")
-            else:
-                ctx.logger.warning(
-                    "S3_DESTINATION feature enabled but no S3 connection configured. "
-                    "Configure S3 in organization settings."
-                )
+        if s3_connection:
+            destination_ids.append(s3_connection.id)
+            ctx.logger.info("S3 destination enabled for sync")
+        else:
+            ctx.logger.warning(
+                "No S3 destination connection configured. "
+                "Please configure S3 destination in organization settings."
+            )
 
         return destination_ids
 

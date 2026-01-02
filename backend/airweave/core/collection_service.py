@@ -9,13 +9,14 @@ from airweave import crud, schemas
 from airweave.api.context import ApiContext
 from airweave.core.exceptions import NotFoundException
 from airweave.db.unit_of_work import UnitOfWork
-from airweave.platform.destinations.qdrant import QdrantDestination
+# Qdrant removed in connector-only mode
 
 
 class CollectionService:
     """Service for managing collections.
 
-    Manages the lifecycle of collections across the SQL datamodel and Qdrant.
+    CONNECTOR-ONLY MODE: Manages collections for connector service.
+    Collections use S3 destinations configured via source connections.
     """
 
     async def create(
@@ -81,18 +82,9 @@ class CollectionService:
         collection = await crud.collection.create(db, obj_in=collection_data, ctx=ctx, uow=uow)
         await uow.session.flush()
 
-        # Create Qdrant destination with explicit vector size
-        qdrant_destination = await QdrantDestination.create(
-            credentials=None,  # Native Qdrant uses settings
-            config=None,
-            collection_id=collection.id,
-            organization_id=ctx.organization.id,
-            vector_size=vector_size,
-            logger=ctx.logger,
-        )
-
-        # Setup the physical shared collection
-        await qdrant_destination.setup_collection()
+        # CONNECTOR-ONLY MODE: Skip Qdrant destination creation
+        # Collections will use S3 destinations configured via source connections
+        # No vector database setup needed for connector-only mode
 
         return schemas.Collection.model_validate(collection, from_attributes=True)
 
