@@ -122,4 +122,5 @@ After S3 is configured:
 3. ✅ Verify files in MinIO: http://localhost:9001
 
 See `QUICK_TEST.md` for API testing examples.
-
+AKIAZL3PR6MRV244JIPL
+Heigt6hTOYz9ehcsG0   thest SAOeMznUW0wbMNZCMO2gkW
